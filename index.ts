@@ -1,13 +1,13 @@
 import type { PluginContext } from "@getpaseo/plugin";
-import { MainSurface } from "./main.client";
+import "./watcher.server";
+
+const STOP_KEY = "__archive_branch_cleanup_stop__";
 
 export default function contribute(plugin: PluginContext) {
-  plugin.addSurface("main", MainSurface);
-  plugin.addSidebarItem({
-    id: "main",
-    title: "My plugin",
-    icon: "Blocks",
-    surface: "main",
-  });
-  return () => {};
+  return () => {
+    const stop = (globalThis as Record<string, unknown>)[STOP_KEY];
+    if (typeof stop === "function") {
+      stop();
+    }
+  };
 }
