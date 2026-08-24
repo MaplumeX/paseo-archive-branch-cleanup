@@ -20,6 +20,7 @@ Branch deletion retries for up to 30 seconds, because the daemon may still be re
 ## Safety
 
 - Only touches workspaces where `gitRuntime.isPaseoOwnedWorktree === true` (branches Paseo created)
+- Refuses to delete main-line branches (`main`, `master`, `trunk`, `develop`, `dev`, `production`, `prod`, `release/*`) even on a Paseo-owned worktree, since a worktree can check out an existing branch
 - Only deletes the **local** branch (`git branch -D`), never the remote
 - Branch name is resolved from `githubRuntime.pullRequest.headRefName`, falling back to `gitRuntime.currentBranch`
 - Deletion runs in the main repo root (`project.checkout.mainRepoRoot`), not the worktree

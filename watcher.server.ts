@@ -44,6 +44,24 @@ async function deleteBranchAfterWorktreeGone(
   );
 }
 
+/** Branch names that must never be deleted, even on a Paseo-owned worktree.
+ * Covers common main-line branches. A Paseo worktree can check out an existing
+ * branch (e.g. opening a worktree on `main`), so `isPaseoOwnedWorktree` alone
+ * is not enough to keep the main branch safe. */
+const PROTECTED_BRANCHES = new Set(["main", "master", "trunk", "develop", "dev", "production", "prod"]);
+
+function isProtectedBranch(branch: string): boolean {
+  const name = branch.trim();
+  if (PROTECTED_BRANCHES.has(name)) {
+    return true;
+  }
+  // release/* and release-* patterns
+  if (/^release[/-]/.test(name)) {
+    return true;
+  }
+  return false;
+}
+
 /** Resolve the branch name and main repo root from a workspace descriptor. */
 function resolveArchiveTarget(workspace: {
   id: string;
@@ -76,6 +94,12 @@ function resolveArchiveTarget(workspace: {
     workspace.gitRuntime?.currentBranch ??
     null;
   if (!branch) {
+    return null;
+  }
+
+  // Never delete main-line branches. A Paseo worktree may check out an
+  // existing branch like `main`; deleting it would destroy the main line.
+  if (isProtectedBranch(branch)) {
     return null;
   }
 
