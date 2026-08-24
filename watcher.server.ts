@@ -1,11 +1,35 @@
 import { createPaseoClient } from "@getpaseo/client";
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-const DAEMON_URL = "ws://127.0.0.1:6769/ws";
+const DEFAULT_LISTEN = "127.0.0.1:6767";
 const STOP_KEY = "__archive_branch_cleanup_stop__";
+
+/** Resolve the daemon WebSocket URL from PASEO_HOME/config.json, falling back
+ * to the default listen target so the plugin works without configuration. */
+async function resolveDaemonUrl(): Promise<string> {
+  const home = process.env.PASEO_HOME ?? join(homedir(), ".paseo");
+  try {
+    const raw = await readFile(join(home, "config.json"), "utf8");
+    const config = JSON.parse(raw);
+    const listen = config?.daemon?.listen;
+    if (typeof listen === "string" && listen.length > 0) {
+      // Listen target may be host:port or an absolute unix socket path. Only
+      // host:port can be reached over WebSocket here.
+      if (listen.includes(":")) {
+        return `ws://${listen}/ws`;
+      }
+    }
+  } catch {
+    // PASEO_HOME missing or unreadable; fall through to default.
+  }
+  return `ws://${DEFAULT_LISTEN}/ws`;
+}
 
 /** Wait for a worktree's branch to no longer be checked out, then delete it. */
 async function deleteBranchAfterWorktreeGone(
@@ -127,10 +151,7 @@ type WorkspaceUpdate = {
 // main repo root from earlier upserts and act on `remove`.
 const cachedTargets = new Map<string, { branch: string; mainRepoRoot: string }>();
 
-const client = createPaseoClient({
-  url: DAEMON_URL,
-  clientId: "archive-branch-cleanup",
-});
+let client: ReturnType<typeof createPaseoClient> | null = null;
 
 let unsubscribe: (() => void) | null = null;
 
@@ -160,12 +181,14 @@ const handleUpdate = (update: WorkspaceUpdate) => {
 
 void (async () => {
   try {
+    const url = await resolveDaemonUrl();
+    client = createPaseoClient({ url, clientId: "archive-branch-cleanup" });
     await client.connect();
     // `list({ subscribe: {} })` both hydrates the initial workspace set
     // (populating the cache via upserts) and starts the subscription stream.
     await client.workspaces.list({ subscribe: {} });
     unsubscribe = client.workspaces.subscribe(handleUpdate);
-    console.log("[archive-branch-cleanup] Watching workspace archive events");
+    console.log(`[archive-branch-cleanup] Watching workspace archive events at ${url}`);
   } catch (error) {
     console.error("[archive-branch-cleanup] Failed to start watcher", error);
   }
@@ -174,7 +197,7 @@ void (async () => {
 (globalThis as Record<string, unknown>)[STOP_KEY] = () => {
   try {
     unsubscribe?.();
-    void client.close();
+    void client?.close();
     console.log("[archive-branch-cleanup] Stopped watching");
   } catch (error) {
     console.error("[archive-branch-cleanup] Error during cleanup", error);

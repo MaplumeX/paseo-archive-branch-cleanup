@@ -35,7 +35,7 @@ Requires the daemon-wide **Enable plugins** switch under Settings → Plugins.
 
 ## Requirements
 
-- Paseo daemon reachable at `ws://127.0.0.1:6769` (default loopback)
+- Paseo daemon reachable on the local machine. The plugin auto-detects the listen target from `PASEO_HOME/config.json` (`daemon.listen`), falling back to `127.0.0.1:6767`.
 - Git CLI on PATH
 
 ## Development
