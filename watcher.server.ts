@@ -55,6 +55,18 @@ async function deleteBranchAfterWorktreeGone(
       console.log(
         `[archive-branch-cleanup] Deleted branch "${branch}" in ${mainRepoRoot} for workspace ${workspaceId}`,
       );
+      // Prune remote-tracking refs so branch suggestions in Paseo reflect
+      // branches that were deleted on the remote (e.g. merged PR heads).
+      try {
+        await execFileAsync("git", ["fetch", "--prune", "origin"], {
+          cwd: mainRepoRoot,
+          timeout: 120_000,
+        });
+        console.log(`[archive-branch-cleanup] Pruned remote refs in ${mainRepoRoot}`);
+      } catch (error) {
+        // Network failure is not fatal; local branch deletion already succeeded.
+        console.warn(`[archive-branch-cleanup] git fetch --prune failed in ${mainRepoRoot}`, error);
+      }
       return;
     } catch (error) {
       lastError = error;
