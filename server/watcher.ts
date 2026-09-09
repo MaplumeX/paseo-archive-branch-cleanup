@@ -8,7 +8,6 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_LISTEN = "127.0.0.1:6767";
-const STOP_KEY = "__archive_branch_cleanup_stop__";
 
 /** Resolve the daemon WebSocket URL from PASEO_HOME/config.json, falling back
  * to the default listen target so the plugin works without configuration. */
@@ -191,8 +190,9 @@ const handleUpdate = (update: WorkspaceUpdate) => {
   }
 };
 
-void (async () => {
-  try {
+export function startWatcher(): () => void {
+  (async () => {
+    try {
     const url = await resolveDaemonUrl();
     client = createPaseoClient({ url, clientId: "archive-branch-cleanup" });
     await client.connect();
@@ -204,14 +204,17 @@ void (async () => {
   } catch (error) {
     console.error("[archive-branch-cleanup] Failed to start watcher", error);
   }
-})();
+  })();
 
-(globalThis as Record<string, unknown>)[STOP_KEY] = () => {
-  try {
-    unsubscribe?.();
-    void client?.close();
-    console.log("[archive-branch-cleanup] Stopped watching");
-  } catch (error) {
-    console.error("[archive-branch-cleanup] Error during cleanup", error);
-  }
-};
+  const stop = () => {
+    try {
+      unsubscribe?.();
+      void client?.close();
+      console.log("[archive-branch-cleanup] Stopped watching");
+    } catch (error) {
+      console.error("[archive-branch-cleanup] Error during cleanup", error);
+    }
+  };
+
+  return stop;
+}
