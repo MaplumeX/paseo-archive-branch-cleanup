@@ -1,5 +1,4 @@
 import type { PluginHookContext, PluginHookWorkspace } from "@getpaseo/plugin/server";
-import type { PaseoApi } from "@getpaseo/client";
 import { deleteBranchAfterWorktreeGone } from "./branch";
 
 /** Branch names that must never be deleted, even on a Paseo-owned worktree.
@@ -121,7 +120,7 @@ export function watchArchivedWorkspaces(
 }
 
 async function fetchWorkspace(
-  paseo: PaseoApi,
+  paseo: PluginHookContext["paseo"],
   workspaceId: string,
 ): Promise<WorkspaceDescriptor | null> {
   try {
