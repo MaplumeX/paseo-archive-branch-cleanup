@@ -28,7 +28,10 @@ function isProtectedBranch(branch: string): boolean {
 }
 
 interface WorkspaceDescriptor {
-  id: string;
+  id?: string;
+  workspaceId?: string;
+  cwd?: string;
+  workspaceKind?: string;
   gitRuntime?: {
     currentBranch?: string | null;
     isPaseoOwnedWorktree?: boolean;
@@ -44,7 +47,7 @@ interface WorkspaceDescriptor {
       mainRepoRoot?: string | null;
     };
   } | null;
-  projectRootPath: string;
+  projectRootPath?: string;
 }
 
 /** Resolve the branch name and main repo root from a workspace descriptor. */
@@ -96,13 +99,29 @@ export function watchArchivedWorkspaces(
 
   const remove = on("workspace.archived", async (event, context) => {
     const workspaceId = event.workspace.id;
+    console.log(`[archive-branch-cleanup] Received workspace.archived for ${workspaceId} (cwd=${event.workspace.cwd})`);
     try {
       const workspace = await fetchWorkspace(context.paseo, workspaceId);
+      console.log(
+        `[archive-branch-cleanup] Fetched workspace ${workspaceId}:`,
+        workspace ? JSON.stringify({
+          kind: workspace.workspaceKind,
+          gitRuntime: workspace.gitRuntime ? {
+            branch: workspace.gitRuntime.currentBranch,
+            owned: workspace.gitRuntime.isPaseoOwnedWorktree,
+          } : null,
+          checkout: workspace.project?.checkout ? {
+            owned: workspace.project.checkout.isPaseoOwnedWorktree,
+            mainRepoRoot: workspace.project.checkout.mainRepoRoot,
+          } : null,
+        }) : "null",
+      );
       if (!workspace) {
         return;
       }
       const target = resolveArchiveTarget(workspace);
       if (!target) {
+        console.log(`[archive-branch-cleanup] No archive target for ${workspaceId}; skipping`);
         return;
       }
       console.log(
