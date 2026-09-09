@@ -1,5 +1,12 @@
 import type { PluginHookContext, PluginHookWorkspace } from "@getpaseo/plugin/server";
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { deleteBranchAfterWorktreeGone } from "./branch";
+
+const execFileAsync = promisify(execFile);
 
 /** Branch names that must never be deleted, even on a Paseo-owned worktree.
  * Covers common main-line branches. A Paseo worktree can check out an existing
@@ -27,44 +34,29 @@ function isProtectedBranch(branch: string): boolean {
   return false;
 }
 
-interface WorkspaceDescriptor {
-  id?: string;
-  workspaceId?: string;
-  cwd?: string;
-  workspaceKind?: string;
-  gitRuntime?: {
-    currentBranch?: string | null;
-    isPaseoOwnedWorktree?: boolean;
-  } | null;
-  githubRuntime?: {
-    pullRequest?: {
-      headRefName: string;
-    } | null;
-  } | null;
-  project?: {
-    checkout?: {
-      isPaseoOwnedWorktree?: boolean;
-      mainRepoRoot?: string | null;
-    };
-  } | null;
-  projectRootPath?: string;
+/** Persisted workspace record shape from the daemon's workspaces.json. */
+interface PersistedWorkspace {
+  workspaceId: string;
+  projectId: string;
+  cwd: string;
+  kind: "directory" | "local_checkout" | "checkout" | "worktree";
+  branch?: string | null;
+  worktreeRoot?: string | null;
+  baseBranch?: string | null;
+  isPaseoOwnedWorktree: boolean;
+  mainRepoRoot?: string | null;
+  archivedAt?: string | null;
 }
 
-/** Resolve the branch name and main repo root from a workspace descriptor. */
+/** Resolve the branch name and main repo root from a persisted record. */
 function resolveArchiveTarget(
-  workspace: WorkspaceDescriptor,
+  workspace: PersistedWorkspace,
 ): { branch: string; mainRepoRoot: string } | null {
-  const isOwned =
-    workspace.gitRuntime?.isPaseoOwnedWorktree === true ||
-    workspace.project?.checkout?.isPaseoOwnedWorktree === true;
-  if (!isOwned) {
+  if (!workspace.isPaseoOwnedWorktree) {
     return null;
   }
 
-  const branch =
-    workspace.githubRuntime?.pullRequest?.headRefName ??
-    workspace.gitRuntime?.currentBranch ??
-    null;
+  const branch = workspace.branch ?? null;
   if (!branch) {
     return null;
   }
@@ -75,13 +67,31 @@ function resolveArchiveTarget(
     return null;
   }
 
-  const mainRepoRoot =
-    workspace.project?.checkout?.mainRepoRoot ?? workspace.projectRootPath ?? null;
+  const mainRepoRoot = workspace.mainRepoRoot ?? null;
   if (!mainRepoRoot) {
     return null;
   }
 
   return { branch, mainRepoRoot };
+}
+
+/** Read the daemon's persisted workspace records. The SDK cannot fetch an
+ * archived workspace (refresh() returns null once the archive completes), but
+ * the record stays in workspaces.json with branch and repo information. */
+async function readPersistedWorkspaces(): Promise<PersistedWorkspace[]> {
+  const home = process.env.PASEO_HOME ?? join(homedir(), ".paseo");
+  const file = join(home, "projects", "workspaces.json");
+  try {
+    const raw = await readFile(file, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed as PersistedWorkspace[];
+  } catch (error) {
+    console.error("[archive-branch-cleanup] Failed to read persisted workspaces", error);
+    return [];
+  }
 }
 
 /** Register the workspace.archived hook that cleans up the branch.
@@ -95,61 +105,34 @@ export function watchArchivedWorkspaces(
     ) => void | Promise<void>,
   ) => () => void,
 ): () => void {
-  const inflight = new Set<Promise<void>>();
-
-  const remove = on("workspace.archived", async (event, context) => {
+  const remove = on("workspace.archived", async (event) => {
     const workspaceId = event.workspace.id;
-    console.log(`[archive-branch-cleanup] Received workspace.archived for ${workspaceId} (cwd=${event.workspace.cwd})`);
     try {
-      const workspace = await fetchWorkspace(context.paseo, workspaceId);
-      console.log(
-        `[archive-branch-cleanup] Fetched workspace ${workspaceId}:`,
-        workspace ? JSON.stringify({
-          kind: workspace.workspaceKind,
-          gitRuntime: workspace.gitRuntime ? {
-            branch: workspace.gitRuntime.currentBranch,
-            owned: workspace.gitRuntime.isPaseoOwnedWorktree,
-          } : null,
-          checkout: workspace.project?.checkout ? {
-            owned: workspace.project.checkout.isPaseoOwnedWorktree,
-            mainRepoRoot: workspace.project.checkout.mainRepoRoot,
-          } : null,
-        }) : "null",
-      );
-      if (!workspace) {
+      const workspaces = await readPersistedWorkspaces();
+      const record = workspaces.find((ws) => ws.workspaceId === workspaceId);
+      if (!record) {
+        console.log(
+          `[archive-branch-cleanup] No persisted record for ${workspaceId}; skipping`,
+        );
         return;
       }
-      const target = resolveArchiveTarget(workspace);
+      const target = resolveArchiveTarget(record);
       if (!target) {
-        console.log(`[archive-branch-cleanup] No archive target for ${workspaceId}; skipping`);
+        console.log(
+          `[archive-branch-cleanup] Workspace ${workspaceId} is not a cleanable Paseo-owned worktree; skipping`,
+        );
         return;
       }
       console.log(
         `[archive-branch-cleanup] Workspace ${workspaceId} archived; deleting branch "${target.branch}"`,
       );
       await deleteBranchAfterWorktreeGone(target.branch, target.mainRepoRoot, workspaceId);
-    } finally {
-      // Nothing to track here; kept for symmetry if needed later.
+    } catch (error) {
+      console.error(`[archive-branch-cleanup] Error handling archive of ${workspaceId}`, error);
     }
   });
 
   return () => {
     remove();
   };
-}
-
-async function fetchWorkspace(
-  paseo: PluginHookContext["paseo"],
-  workspaceId: string,
-): Promise<WorkspaceDescriptor | null> {
-  try {
-    const workspace = await paseo.workspaces.ref(workspaceId).refresh();
-    return (workspace as WorkspaceDescriptor | null) ?? null;
-  } catch (error) {
-    console.error(
-      `[archive-branch-cleanup] Failed to fetch workspace ${workspaceId}`,
-      error,
-    );
-    return null;
-  }
 }
