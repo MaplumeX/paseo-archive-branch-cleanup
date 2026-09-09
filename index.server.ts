@@ -1,9 +1,9 @@
 import type { PluginServerContext } from "@getpaseo/plugin/server";
-import { startWatcher } from "./server/watcher";
+import { watchArchivedWorkspaces } from "./server/watcher";
 
 export default function contribute(server: PluginServerContext) {
-  const stop = startWatcher();
+  const removeHook = watchArchivedWorkspaces((name, handler) => server.on(name, handler));
   return () => {
-    stop();
+    removeHook();
   };
 }
