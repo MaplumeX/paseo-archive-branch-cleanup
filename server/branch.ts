@@ -9,6 +9,26 @@ export async function deleteBranchAfterWorktreeGone(
   mainRepoRoot: string,
   workspaceId: string,
 ): Promise<void> {
+  // Only delete when every commit on the branch is on a remote, so archiving
+  // never loses unpushed work. Checked before the prune below drops origin/<branch>.
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-list", "--count", `refs/heads/${branch}`, "--not", "--remotes"],
+      { cwd: mainRepoRoot, timeout: 10_000 },
+    );
+    const unpushed = Number(stdout.trim());
+    if (unpushed !== 0) {
+      console.log(
+        `[archive-branch-cleanup] Kept branch "${branch}" in ${mainRepoRoot}: ${unpushed} commit(s) not on any remote`,
+      );
+      return;
+    }
+  } catch (error) {
+    console.warn(`[archive-branch-cleanup] Kept branch "${branch}": could not check for unpushed commits`, error);
+    return;
+  }
+
   const deadline = Date.now() + 30_000;
   let lastError: unknown = null;
 
